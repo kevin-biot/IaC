@@ -19,16 +19,29 @@ deploys the application into their own namespace using Pulumi.
    ```
 
 2. Configure your Pulumi stack. Replace `student01` with your assigned
-   namespace and provide Docker registry credentials so Pulumi can push the
-   application image.
+   namespace.
 
    ```bash
    pulumi stack init dev    # if creating a new stack
    pulumi config set studentNamespace student01
+   pulumi config set --secret dbPassword <db-password>   # optional
+   ```
+
+   Authenticate your Docker client to the cluster's image registry so the
+   application image can be pushed:
+
+   ```bash
+   oc registry login
+   ```
+
+   By default the image is published to
+   `image-registry.openshift-image-registry.svc:5000/<namespace>/sample-form-app:latest`.
+   To use a different registry, also set the following configuration values:
+
+   ```bash
    pulumi config set appImage <registry>/sample-form-app:latest
    pulumi config set registry.username <registry-user>
    pulumi config set --secret registry.password <registry-password>
-   pulumi config set --secret dbPassword <db-password>   # optional
    ```
 
 3. Deploy:

@@ -6,7 +6,9 @@ const config = new pulumi.Config();
 const nsName = config.require("studentNamespace");
 const dbPassword = config.getSecret("dbPassword") || pulumi.secret("password");
 
-const imageName = config.get("appImage") || `sample-form-app:${nsName}`;
+const imageName =
+  config.get("appImage") ||
+  `image-registry.openshift-image-registry.svc:5000/${nsName}/sample-form-app:latest`;
 const registry = config.getObject<docker.ImageRegistry>("registry");
 
 // Build and push the application image
