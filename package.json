@@ -1,0 +1,12 @@
+{
+  "name": "workshop-sample",
+  "version": "1.0.0",
+  "dependencies": {
+    "@pulumi/pulumi": "^3.88.2",
+    "@pulumi/kubernetes": "^4.10.0",
+    "@pulumi/docker": "^3.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.2.2"
+  }
+}

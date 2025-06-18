@@ -1,0 +1,3 @@
+name: workshop-sample
+runtime: nodejs
+description: Sample Pulumi project for OpenShift workshop
