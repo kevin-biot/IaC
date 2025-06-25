@@ -1,26 +1,54 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as k8s from "@pulumi/kubernetes";
-import * as docker from "@pulumi/docker";
 
 const config = new pulumi.Config();
 const nsName = config.require("studentNamespace");
 const dbPassword = config.getSecret("dbPassword") || pulumi.secret("password");
 
-const imageName =
-  config.get("appImage") ||
-  `image-registry.openshift-image-registry.svc:5000/${nsName}/sample-form-app:latest`;
-const registry = config.getObject<docker.ImageRegistry>("registry");
-
-// Build and push the application image
-const appImage = new docker.Image("app-image", {
-  build: "./app",
-  imageName: imageName,
-  registry: registry,
-});
+// Use Tekton/Shipwright built image instead of Docker build
+const imageName = `image-registry.openshift-image-registry.svc:5000/${nsName}/sample-form-app:latest`;
 
 const namespace = new k8s.core.v1.Namespace(nsName, {
   metadata: { name: nsName },
 });
+
+// Tekton BuildConfig for application image
+const buildConfig = new k8s.apiextensions.CustomResource("sample-form-app-build", {
+  apiVersion: "shipwright.io/v1alpha1",
+  kind: "Build",
+  metadata: { 
+    name: "sample-form-app-build",
+    namespace: namespace.metadata.name 
+  },
+  spec: {
+    source: {
+      url: "https://github.com/kevin-biot/IaC",
+      contextDir: "app"
+    },
+    strategy: {
+      name: "buildpacks-v3",
+      kind: "BuildStrategy"
+    },
+    output: {
+      image: imageName
+    }
+  }
+}, { dependsOn: [namespace] });
+
+// Trigger the build
+const buildRun = new k8s.apiextensions.CustomResource("sample-form-app-buildrun", {
+  apiVersion: "shipwright.io/v1alpha1", 
+  kind: "BuildRun",
+  metadata: {
+    name: "sample-form-app-buildrun",
+    namespace: namespace.metadata.name
+  },
+  spec: {
+    buildRef: {
+      name: buildConfig.metadata.name
+    }
+  }
+}, { dependsOn: [buildConfig] });
 
 const postgresLabels = { app: "postgres" };
 const postgres = new k8s.apps.v1.Deployment("postgres", {
@@ -45,7 +73,7 @@ const postgres = new k8s.apps.v1.Deployment("postgres", {
       },
     },
   },
-});
+}, { dependsOn: [namespace] });
 
 const postgresSvc = new k8s.core.v1.Service("postgres-svc", {
   metadata: { namespace: namespace.metadata.name },
@@ -53,7 +81,7 @@ const postgresSvc = new k8s.core.v1.Service("postgres-svc", {
     selector: postgresLabels,
     ports: [{ port: 5432 }],
   },
-});
+}, { dependsOn: [postgres] });
 
 const appLabels = { app: "web" };
 const appDeployment = new k8s.apps.v1.Deployment("web", {
@@ -66,7 +94,7 @@ const appDeployment = new k8s.apps.v1.Deployment("web", {
         containers: [
           {
             name: "web",
-            image: appImage.imageName,
+            image: imageName,
             env: [
               { name: "DB_HOST", value: postgresSvc.metadata.name },
               { name: "DB_USER", value: "user" },
@@ -79,7 +107,7 @@ const appDeployment = new k8s.apps.v1.Deployment("web", {
       },
     },
   },
-});
+}, { dependsOn: [buildRun, postgresSvc] });
 
 const appSvc = new k8s.core.v1.Service("web-svc", {
   metadata: { namespace: namespace.metadata.name },
@@ -87,26 +115,31 @@ const appSvc = new k8s.core.v1.Service("web-svc", {
     selector: appLabels,
     ports: [{ port: 80, targetPort: 8080 }],
   },
-});
+}, { dependsOn: [appDeployment] });
 
-// Expose via OpenShift Route if available
+// Expose via OpenShift Route
 const route = new k8s.apiextensions.CustomResource("web-route", {
   apiVersion: "route.openshift.io/v1",
   kind: "Route",
-  metadata: { namespace: namespace.metadata.name },
+  metadata: { 
+    name: "web-route",
+    namespace: namespace.metadata.name 
+  },
   spec: {
     to: { kind: "Service", name: appSvc.metadata.name },
     port: { targetPort: 8080 },
   },
-});
+}, { dependsOn: [appSvc] });
 
-// Example RBAC
+// RBAC with proper dependencies
 const role = new k8s.rbac.v1.Role("web-role", {
   metadata: { namespace: namespace.metadata.name },
   rules: [
     { apiGroups: [""], resources: ["configmaps"], verbs: ["get", "list"] },
+    { apiGroups: [""], resources: ["pods"], verbs: ["get", "list"] },
+    { apiGroups: ["apps"], resources: ["deployments"], verbs: ["get", "list"] },
   ],
-});
+}, { dependsOn: [namespace] });
 
 new k8s.rbac.v1.RoleBinding("web-rolebinding", {
   metadata: { namespace: namespace.metadata.name },
@@ -118,6 +151,9 @@ new k8s.rbac.v1.RoleBinding("web-rolebinding", {
     name: role.metadata.name,
     apiGroup: "rbac.authorization.k8s.io",
   },
-});
+}, { dependsOn: [role] });
 
-export const appUrl = route.status.apply(s => `http://${s.ingress[0].host}`);
+// Export the application URL - construct it properly for OpenShift routes
+export const appUrl = pulumi.interpolate`https://${route.metadata.name}-${namespace.metadata.name}.apps.cluster.local`;
+export const buildStatus = buildRun.metadata.name;
+export const namespace_name = namespace.metadata.name;

@@ -1,0 +1,46 @@
+apiVersion: shipwright.io/v1alpha1
+kind: BuildStrategy
+metadata:
+  name: buildpacks-v3
+spec:
+  buildSteps:
+    - name: build-and-push
+      image: gcr.io/paketo-buildpacks/builder:base
+      workingDir: $(params.shp-source-root)
+      command:
+        - /cnb/lifecycle/creator
+      args:
+        - -app=$(params.shp-source-root)
+        - -cache-dir=/tmp/cache
+        - -uid=1001
+        - -gid=1000
+        - -layers=/tmp/layers
+        - -platform=/tmp/platform
+        - -report=/tmp/report.toml
+        - -process-type=web
+        - -skip-restore=false
+        - $(params.shp-output-image)
+      env:
+        - name: CNB_PLATFORM_API
+          value: "0.4"
+        - name: CNB_STACK_ID
+          value: "io.buildpacks.stacks.bionic"
+      volumeMounts:
+        - name: cache-volume
+          mountPath: /tmp/cache
+        - name: layers-volume  
+          mountPath: /tmp/layers
+        - name: platform-volume
+          mountPath: /tmp/platform
+  volumes:
+    - name: cache-volume
+      emptyDir: {}
+    - name: layers-volume
+      emptyDir: {}
+    - name: platform-volume
+      emptyDir: {}
+  parameters:
+    - name: shp-source-root
+      description: "The source root directory"
+    - name: shp-output-image
+      description: "The output image"

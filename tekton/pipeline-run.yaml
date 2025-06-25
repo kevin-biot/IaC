@@ -1,0 +1,31 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: student-build-deploy-run
+spec:
+  pipelineRef:
+    name: student-build-deploy
+  params:
+    - name: STUDENT_NAMESPACE
+      value: "student01"  # This will be replaced by students
+    - name: GIT_URL
+      value: "https://github.com/kevin-biot/IaC"
+    - name: IMAGE_NAME
+      value: "image-registry.openshift-image-registry.svc:5000/student01/sample-form-app:latest"
+  workspaces:
+    - name: source-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+    - name: cache-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi

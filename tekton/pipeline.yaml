@@ -1,0 +1,88 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: student-build-deploy
+spec:
+  params:
+    - name: STUDENT_NAMESPACE
+      description: Student namespace for deployment
+    - name: GIT_URL
+      description: Git repository URL
+      default: "https://github.com/kevin-biot/IaC"
+    - name: GIT_REVISION
+      description: Git revision to build
+      default: "main"
+    - name: IMAGE_NAME
+      description: Name of the image to build
+  
+  workspaces:
+    - name: source-workspace
+    - name: cache-workspace
+
+  tasks:
+    - name: git-clone
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      params:
+        - name: url
+          value: $(params.GIT_URL)
+        - name: revision
+          value: $(params.GIT_REVISION)
+        - name: subdirectory
+          value: "source"
+      workspaces:
+        - name: output
+          workspace: source-workspace
+
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      params:
+        - name: IMAGE
+          value: $(params.IMAGE_NAME)
+        - name: CONTEXT
+          value: source/app
+        - name: DOCKERFILE
+          value: source/app/Dockerfile
+      workspaces:
+        - name: source
+          workspace: source-workspace
+      runAfter:
+        - git-clone
+
+    - name: deploy-app
+      taskRef:
+        name: oc-client
+        kind: ClusterTask
+      params:
+        - name: SCRIPT
+          value: |
+            oc project $(params.STUDENT_NAMESPACE)
+            
+            # Update deployment to use new image
+            oc set image deployment/web web=$(params.IMAGE_NAME) || echo "Deployment will be created by Pulumi"
+            
+            # Check deployment status
+            oc get pods -l app=web
+      runAfter:
+        - build-image
+
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: oc-client
+spec:
+  params:
+    - name: SCRIPT
+      description: The OpenShift CLI script to run
+      type: string
+  steps:
+    - name: oc
+      image: quay.io/openshift/origin-cli:latest
+      script: |
+        #!/bin/bash
+        set -e
+        $(params.SCRIPT)
