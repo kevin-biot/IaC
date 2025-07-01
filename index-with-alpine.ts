@@ -52,7 +52,6 @@ const buildRun = new k8s.apiextensions.CustomResource("sample-form-app-buildrun"
   }
 }, { dependsOn: [buildConfig], provider: namespaceProvider });
 
-// Use OpenShift-native PostgreSQL that works with restricted SCC
 const postgresLabels = { app: "postgres" };
 const postgres = new k8s.apps.v1.Deployment("postgres", {
   metadata: { 
@@ -62,39 +61,47 @@ const postgres = new k8s.apps.v1.Deployment("postgres", {
   spec: {
     selector: { matchLabels: postgresLabels },
     template: {
-      metadata: { 
-        labels: postgresLabels,
-        annotations: {
-          "openshift.io/scc": "restricted-v2"
-        }
-      },
+      metadata: { labels: postgresLabels },
       spec: {
-        // Let OpenShift assign random UID - don't fight the SCC
+        securityContext: {
+          runAsNonRoot: true,
+          runAsUser: 999,  // postgres user ID
+          fsGroup: 999,    // postgres group ID
+        },
         containers: [
           {
             name: "postgres",
-            image: "quay.io/centos7/postgresql-13-centos7:latest",  // OpenShift-optimized image
+            image: "postgres:13-alpine",  // Smaller, more OpenShift-friendly
             env: [
-              { name: "POSTGRESQL_DATABASE", value: "students" },
-              { name: "POSTGRESQL_USER", value: "user" },
-              { name: "POSTGRESQL_PASSWORD", value: dbPassword },
-              { name: "POSTGRESQL_ADMIN_PASSWORD", value: dbPassword },
+              { name: "POSTGRES_DB", value: "students" },
+              { name: "POSTGRES_USER", value: "user" },
+              { name: "POSTGRES_PASSWORD", value: dbPassword },
+              { name: "PGDATA", value: "/var/lib/postgresql/data/pgdata" },
+              { name: "POSTGRES_INITDB_ARGS", value: "--auth-host=scram-sha-256" },
             ],
             ports: [{ containerPort: 5432 }],
             volumeMounts: [{
               name: "postgres-data",
-              mountPath: "/var/lib/pgsql/data"
+              mountPath: "/var/lib/postgresql/data"
             }],
+            securityContext: {
+              runAsNonRoot: true,
+              runAsUser: 999,
+              allowPrivilegeEscalation: false,
+              capabilities: {
+                drop: ["ALL"]
+              }
+            },
             readinessProbe: {
               exec: {
-                command: ["sh", "-c", "pg_isready -h localhost -p 5432"]
+                command: ["pg_isready", "-U", "user", "-d", "students"]
               },
               initialDelaySeconds: 15,
               periodSeconds: 5
             },
             livenessProbe: {
               exec: {
-                command: ["sh", "-c", "pg_isready -h localhost -p 5432"]
+                command: ["pg_isready", "-U", "user", "-d", "students"]
               },
               initialDelaySeconds: 30,
               periodSeconds: 10
