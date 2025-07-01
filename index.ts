@@ -145,36 +145,6 @@ const route = new k8s.apiextensions.CustomResource("web-route", {
   },
 }, { dependsOn: [appSvc], provider: namespaceProvider });
 
-// RBAC with explicit name and proper dependencies
-// Create Role first
-const role = new k8s.rbac.v1.Role("web-role", {
-  metadata: { 
-    name: "web-role",
-    namespace: nsName 
-  },
-  rules: [
-    { apiGroups: [""], resources: ["configmaps"], verbs: ["get", "list"] },
-    { apiGroups: [""], resources: ["pods"], verbs: ["get", "list"] },
-    { apiGroups: ["apps"], resources: ["deployments"], verbs: ["get", "list"] },
-  ],
-}, { provider: namespaceProvider });
-
-// Create RoleBinding after Role
-const roleBinding = new k8s.rbac.v1.RoleBinding("web-rolebinding", {
-  metadata: { 
-    name: "web-rolebinding",
-    namespace: nsName 
-  },
-  subjects: [
-    { kind: "ServiceAccount", name: "default", namespace: nsName },
-  ],
-  roleRef: {
-    kind: "Role",
-    name: "web-role",
-    apiGroup: "rbac.authorization.k8s.io",
-  },
-}, { dependsOn: [role], provider: namespaceProvider });
-
 // Export the application URL - construct it properly for OpenShift routes
 export const appUrl = pulumi.interpolate`https://web-route-${nsName}.apps.cluster.local`;
 export const routeName = "web-route";
