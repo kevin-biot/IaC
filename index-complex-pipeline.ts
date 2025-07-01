@@ -5,7 +5,7 @@ const config = new pulumi.Config();
 const nsName = config.require("studentNamespace");
 const dbPassword = config.getSecret("dbPassword") || pulumi.secret("password");
 
-// Use Tekton/Shipwright built image
+// Use Tekton Pipeline built image
 const imageName = `image-registry.openshift-image-registry.svc:5000/${nsName}/sample-form-app:latest`;
 
 // Use existing namespace
@@ -13,7 +13,7 @@ const namespaceProvider = new k8s.Provider("k8s-provider", {
   namespace: nsName,
 });
 
-// Create Shipwright Build (exactly like working java-webapp)
+// Create Shipwright Build (same as before, but will be triggered by Tekton)
 const buildConfig = new k8s.apiextensions.CustomResource("sample-form-app-build", {
   apiVersion: "shipwright.io/v1beta1",
   kind: "Build",
@@ -24,7 +24,7 @@ const buildConfig = new k8s.apiextensions.CustomResource("sample-form-app-build"
   spec: {
     source: {
       type: "Git",
-      contextDir: ".",  // Use root like java-webapp
+      contextDir: ".",  // Use root directory
       git: {
         url: "https://github.com/kevin-biot/IaC",
         revision: "main"
@@ -40,7 +40,7 @@ const buildConfig = new k8s.apiextensions.CustomResource("sample-form-app-build"
     paramValues: [
       {
         name: "dockerfile",
-        value: "app/Dockerfile"  // Point to app/Dockerfile
+        value: "app/Dockerfile"  // Point to Dockerfile in app subdirectory
       },
       {
         name: "storage-driver", 
@@ -50,84 +50,186 @@ const buildConfig = new k8s.apiextensions.CustomResource("sample-form-app-build"
   }
 }, { provider: namespaceProvider });
 
-// Simple Tekton Task to trigger BuildRun (like java-webapp did)
-const triggerTask = new k8s.apiextensions.CustomResource("trigger-build-task", {
-  apiVersion: "tekton.dev/v1beta1",
-  kind: "Task",
+// Create Tekton Pipeline Workspace (required for pipeline)
+const pipelinePVC = new k8s.core.v1.PersistentVolumeClaim("pipeline-workspace", {
   metadata: {
-    name: "trigger-build-task",
+    name: "pipeline-workspace",
+    namespace: nsName
+  },
+  spec: {
+    accessModes: ["ReadWriteOnce"],
+    resources: {
+      requests: {
+        storage: "1Gi"
+      }
+    }
+  }
+}, { provider: namespaceProvider });
+
+// Create Tekton Pipeline for Node.js app
+const pipeline = new k8s.apiextensions.CustomResource("nodejs-build-pipeline", {
+  apiVersion: "tekton.dev/v1beta1",
+  kind: "Pipeline",
+  metadata: {
+    name: "nodejs-build-pipeline",
     namespace: nsName
   },
   spec: {
     params: [
       {
-        name: "BUILD_NAME",
-        type: "string"
+        name: "git-url",
+        type: "string",
+        description: "Public Git repo URL"
       },
       {
-        name: "NAMESPACE", 
-        type: "string"
+        name: "git-revision", 
+        type: "string",
+        description: "Branch, tag or commit",
+        default: "main"
+      },
+      {
+        name: "build-name",
+        type: "string", 
+        description: "Shipwright Build name"
+      },
+      {
+        name: "namespace",
+        type: "string",
+        description: "Target OpenShift project"
       }
     ],
-    steps: [
+    workspaces: [
       {
-        name: "create-buildrun",
-        image: "quay.io/openshift/origin-cli:latest",
-        script: `
-          #!/bin/bash
-          set -e
-          
-          BUILD_NAME="$(params.BUILD_NAME)"
-          NAMESPACE="$(params.NAMESPACE)"
-          BUILDRUN_NAME="\${BUILD_NAME}-run-$(date +%s)"
-          
-          echo "Creating BuildRun: \$BUILDRUN_NAME"
-          
-          cat << EOF | oc apply -f -
-          apiVersion: shipwright.io/v1beta1
-          kind: BuildRun
-          metadata:
-            name: \$BUILDRUN_NAME
-            namespace: \$NAMESPACE
-          spec:
-            build:
-              name: \$BUILD_NAME
-          EOF
-          
-          echo "Waiting for BuildRun completion..."
-          oc wait --for=condition=Succeeded=true buildrun/\$BUILDRUN_NAME -n \$NAMESPACE --timeout=10m
-        `
+        name: "source",
+        description: "Where source is checked out"
+      }
+    ],
+    tasks: [
+      {
+        name: "clone",
+        taskRef: {
+          name: "git-clone",
+          kind: "ClusterTask"
+        },
+        params: [
+          {
+            name: "url",
+            value: "$(params.git-url)"
+          },
+          {
+            name: "revision", 
+            value: "$(params.git-revision)"
+          }
+        ],
+        workspaces: [
+          {
+            name: "output",  // git-clone ClusterTask uses "output" workspace
+            workspace: "source"
+          }
+        ]
+      },
+      {
+        name: "build-nodejs",
+        runAfter: ["clone"],
+        taskRef: {
+          name: "node-build",
+          kind: "ClusterTask"
+        },
+        params: [
+          {
+            name: "source-dir",
+            value: "app"
+          }
+        ],
+        workspaces: [
+          {
+            name: "source",  // Our custom task uses "source" workspace
+            workspace: "source"
+          }
+        ]
+      },
+      {
+        name: "shipwright",
+        runAfter: ["build-nodejs"],
+        taskRef: {
+          name: "shipwright-trigger",
+          kind: "ClusterTask"
+        },
+        params: [
+          {
+            name: "BUILD_NAME",
+            value: "$(params.build-name)"
+          },
+          {
+            name: "NAMESPACE",
+            value: "$(params.namespace)"
+          }
+        ]
+      },
+      {
+        name: "deploy",
+        runAfter: ["shipwright"],
+        taskRef: {
+          name: "deploy-app",
+          kind: "ClusterTask"
+        },
+        params: [
+          {
+            name: "NAMESPACE",
+            value: "$(params.namespace)"
+          },
+          {
+            name: "APP_NAME",
+            value: "web"
+          }
+        ]
       }
     ]
   }
 }, { dependsOn: [buildConfig], provider: namespaceProvider });
 
-// TaskRun to execute the build trigger (like java-webapp)
-const buildTaskRun = new k8s.apiextensions.CustomResource("build-trigger-run", {
+// Create PipelineRun to execute the pipeline
+const pipelineRun = new k8s.apiextensions.CustomResource("nodejs-build-run", {
   apiVersion: "tekton.dev/v1beta1",
-  kind: "TaskRun",
+  kind: "PipelineRun", 
   metadata: {
-    name: "build-trigger-run",
+    name: "nodejs-build-run",
     namespace: nsName
   },
   spec: {
-    taskRef: {
-      name: "trigger-build-task"
+    pipelineRef: {
+      name: "nodejs-build-pipeline"
     },
     params: [
       {
-        name: "BUILD_NAME",
+        name: "git-url",
+        value: "https://github.com/kevin-biot/IaC"
+      },
+      {
+        name: "git-revision",
+        value: "main"
+      },
+      {
+        name: "build-name", 
         value: "sample-form-app-build"
       },
       {
-        name: "NAMESPACE",
+        name: "namespace",
         value: nsName
+      }
+    ],
+    workspaces: [
+      {
+        name: "source",
+        persistentVolumeClaim: {
+          claimName: "pipeline-workspace"
+        }
       }
     ]
   }
-}, { dependsOn: [triggerTask], provider: namespaceProvider });
+}, { dependsOn: [pipeline, pipelinePVC], provider: namespaceProvider });
 
-// PostgreSQL (working fine)
+// PostgreSQL (same as before - working fine)
 const postgresLabels = { app: "postgres" };
 const postgres = new k8s.apps.v1.Deployment("postgres", {
   metadata: { 
@@ -192,7 +294,7 @@ const postgresSvc = new k8s.core.v1.Service("postgres-svc", {
   },
 }, { dependsOn: [postgres], provider: namespaceProvider });
 
-// Web application deployment (depends on build completion)
+// Web application deployment (depends on pipeline completion)
 const appLabels = { app: "web" };
 const appDeployment = new k8s.apps.v1.Deployment("web", {
   metadata: { 
@@ -207,7 +309,7 @@ const appDeployment = new k8s.apps.v1.Deployment("web", {
         containers: [
           {
             name: "web",
-            image: imageName,
+            image: imageName,  // Will be built by Tekton pipeline
             env: [
               { name: "DB_HOST", value: "postgres-svc" },
               { name: "DB_USER", value: "user" },
@@ -220,7 +322,7 @@ const appDeployment = new k8s.apps.v1.Deployment("web", {
       },
     },
   },
-}, { dependsOn: [buildTaskRun, postgresSvc], provider: namespaceProvider });
+}, { dependsOn: [pipelineRun, postgresSvc], provider: namespaceProvider });
 
 const appSvc = new k8s.core.v1.Service("web-svc", {
   metadata: { 
@@ -250,5 +352,7 @@ const route = new k8s.apiextensions.CustomResource("web-route", {
 // Export the application URL
 export const appUrl = pulumi.interpolate`https://web-route-${nsName}.apps.cluster.local`;
 export const routeName = "web-route";
-export const buildStatus = "tekton-triggered-buildrun";
+export const buildStatus = "tekton-pipeline-build";
+export const pipelineName = "nodejs-build-pipeline";
+export const pipelineRunName = "nodejs-build-run";
 export const namespace_name = nsName;
