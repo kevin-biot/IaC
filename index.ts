@@ -8,8 +8,10 @@ const dbPassword = config.getSecret("dbPassword") || pulumi.secret("password");
 // Use Tekton/Shipwright built image instead of Docker build
 const imageName = `image-registry.openshift-image-registry.svc:5000/${nsName}/sample-form-app:latest`;
 
-const namespace = new k8s.core.v1.Namespace(nsName, {
-  metadata: { name: nsName },
+// Use existing namespace instead of creating new one
+// This avoids conflicts when namespace already exists
+const namespaceProvider = new k8s.Provider("k8s-provider", {
+  namespace: nsName,
 });
 
 // Tekton BuildConfig for application image
@@ -18,7 +20,7 @@ const buildConfig = new k8s.apiextensions.CustomResource("sample-form-app-build"
   kind: "Build",
   metadata: { 
     name: "sample-form-app-build",
-    namespace: namespace.metadata.name 
+    namespace: nsName 
   },
   spec: {
     source: {
@@ -33,7 +35,7 @@ const buildConfig = new k8s.apiextensions.CustomResource("sample-form-app-build"
       image: imageName
     }
   }
-}, { dependsOn: [namespace] });
+}, { provider: namespaceProvider });
 
 // Trigger the build
 const buildRun = new k8s.apiextensions.CustomResource("sample-form-app-buildrun", {
@@ -41,18 +43,21 @@ const buildRun = new k8s.apiextensions.CustomResource("sample-form-app-buildrun"
   kind: "BuildRun",
   metadata: {
     name: "sample-form-app-buildrun",
-    namespace: namespace.metadata.name
+    namespace: nsName
   },
   spec: {
     buildRef: {
-      name: buildConfig.metadata.name
+      name: "sample-form-app-build"
     }
   }
-}, { dependsOn: [buildConfig] });
+}, { dependsOn: [buildConfig], provider: namespaceProvider });
 
 const postgresLabels = { app: "postgres" };
 const postgres = new k8s.apps.v1.Deployment("postgres", {
-  metadata: { namespace: namespace.metadata.name },
+  metadata: { 
+    name: "postgres",
+    namespace: nsName 
+  },
   spec: {
     selector: { matchLabels: postgresLabels },
     template: {
@@ -73,19 +78,25 @@ const postgres = new k8s.apps.v1.Deployment("postgres", {
       },
     },
   },
-}, { dependsOn: [namespace] });
+}, { provider: namespaceProvider });
 
 const postgresSvc = new k8s.core.v1.Service("postgres-svc", {
-  metadata: { namespace: namespace.metadata.name },
+  metadata: { 
+    name: "postgres-svc",
+    namespace: nsName 
+  },
   spec: {
     selector: postgresLabels,
     ports: [{ port: 5432 }],
   },
-}, { dependsOn: [postgres] });
+}, { dependsOn: [postgres], provider: namespaceProvider });
 
 const appLabels = { app: "web" };
 const appDeployment = new k8s.apps.v1.Deployment("web", {
-  metadata: { namespace: namespace.metadata.name },
+  metadata: { 
+    name: "web",
+    namespace: nsName 
+  },
   spec: {
     selector: { matchLabels: appLabels },
     template: {
@@ -96,9 +107,9 @@ const appDeployment = new k8s.apps.v1.Deployment("web", {
             name: "web",
             image: imageName,
             env: [
-              { name: "DB_HOST", value: postgresSvc.metadata.name },
+              { name: "DB_HOST", value: "postgres-svc" },
               { name: "DB_USER", value: "user" },
-              { name: "DB_PASS", value: dbPassword.apply(p => p) },
+              { name: "DB_PASS", value: dbPassword },
               { name: "DB_NAME", value: "students" },
             ],
             ports: [{ containerPort: 8080 }],
@@ -107,15 +118,18 @@ const appDeployment = new k8s.apps.v1.Deployment("web", {
       },
     },
   },
-}, { dependsOn: [buildRun, postgresSvc] });
+}, { dependsOn: [buildRun, postgresSvc], provider: namespaceProvider });
 
 const appSvc = new k8s.core.v1.Service("web-svc", {
-  metadata: { namespace: namespace.metadata.name },
+  metadata: { 
+    name: "web-svc",
+    namespace: nsName 
+  },
   spec: {
     selector: appLabels,
     ports: [{ port: 80, targetPort: 8080 }],
   },
-}, { dependsOn: [appDeployment] });
+}, { dependsOn: [appDeployment], provider: namespaceProvider });
 
 // Expose via OpenShift Route
 const route = new k8s.apiextensions.CustomResource("web-route", {
@@ -123,46 +137,46 @@ const route = new k8s.apiextensions.CustomResource("web-route", {
   kind: "Route",
   metadata: { 
     name: "web-route",
-    namespace: namespace.metadata.name 
+    namespace: nsName 
   },
   spec: {
-    to: { kind: "Service", name: appSvc.metadata.name },
+    to: { kind: "Service", name: "web-svc" },
     port: { targetPort: 8080 },
   },
-}, { dependsOn: [appSvc] });
+}, { dependsOn: [appSvc], provider: namespaceProvider });
 
 // RBAC with explicit name and proper dependencies
-const roleName = "web-role";
+// Create Role first
 const role = new k8s.rbac.v1.Role("web-role", {
   metadata: { 
-    name: roleName,
-    namespace: namespace.metadata.name 
+    name: "web-role",
+    namespace: nsName 
   },
   rules: [
     { apiGroups: [""], resources: ["configmaps"], verbs: ["get", "list"] },
     { apiGroups: [""], resources: ["pods"], verbs: ["get", "list"] },
     { apiGroups: ["apps"], resources: ["deployments"], verbs: ["get", "list"] },
   ],
-}, { dependsOn: [namespace] });
+}, { provider: namespaceProvider });
 
+// Create RoleBinding after Role
 const roleBinding = new k8s.rbac.v1.RoleBinding("web-rolebinding", {
   metadata: { 
     name: "web-rolebinding",
-    namespace: namespace.metadata.name 
+    namespace: nsName 
   },
   subjects: [
     { kind: "ServiceAccount", name: "default", namespace: nsName },
   ],
   roleRef: {
     kind: "Role",
-    name: roleName,  // Use explicit string instead of resource reference
+    name: "web-role",
     apiGroup: "rbac.authorization.k8s.io",
   },
-}, { dependsOn: [role] });
+}, { dependsOn: [role], provider: namespaceProvider });
 
 // Export the application URL - construct it properly for OpenShift routes
-// Note: The actual domain will be determined by the OpenShift cluster configuration
 export const appUrl = pulumi.interpolate`https://web-route-${nsName}.apps.cluster.local`;
-export const routeName = route.metadata.name;
-export const buildStatus = buildRun.metadata.name;
-export const namespace_name = namespace.metadata.name;
+export const routeName = "web-route";
+export const buildStatus = "sample-form-app-buildrun";
+export const namespace_name = nsName;
