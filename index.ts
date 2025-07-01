@@ -69,18 +69,17 @@ const postgres = new k8s.apps.v1.Deployment("postgres", {
         containers: [
           {
             name: "postgres",
-            image: "postgres:13",  // Standard PostgreSQL image - works with anyuid SCC
+            image: "docker.io/bitnami/postgresql:13",  // Bitnami - OpenShift compatible
             env: [
-              { name: "POSTGRES_DATABASE", value: "students" },
-              { name: "POSTGRES_USER", value: "user" },
-              { name: "POSTGRES_PASSWORD", value: dbPassword },
-              { name: "POSTGRES_DB", value: "students" },  // Ensure database is created
-              { name: "PGDATA", value: "/var/lib/postgresql/data/pgdata" },
+              { name: "POSTGRESQL_DATABASE", value: "students" },
+              { name: "POSTGRESQL_USERNAME", value: "user" },
+              { name: "POSTGRESQL_PASSWORD", value: dbPassword },
+              { name: "POSTGRES_PASSWORD", value: dbPassword },  // Bitnami also checks this
             ],
             ports: [{ containerPort: 5432 }],
             volumeMounts: [{
               name: "postgres-data",
-              mountPath: "/var/lib/postgresql/data"
+              mountPath: "/bitnami/postgresql"
             }],
             readinessProbe: {
               exec: {
