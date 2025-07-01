@@ -52,7 +52,7 @@ const buildRun = new k8s.apiextensions.CustomResource("sample-form-app-buildrun"
   }
 }, { dependsOn: [buildConfig], provider: namespaceProvider });
 
-// Use publicly available PostgreSQL image that works with anyuid SCC
+// Use OpenShift-native PostgreSQL that works with restricted SCC
 const postgresLabels = { app: "postgres" };
 const postgres = new k8s.apps.v1.Deployment("postgres", {
   metadata: { 
@@ -63,35 +63,37 @@ const postgres = new k8s.apps.v1.Deployment("postgres", {
     selector: { matchLabels: postgresLabels },
     template: {
       metadata: { 
-        labels: postgresLabels
+        labels: postgresLabels,
+        annotations: {
+          "openshift.io/scc": "restricted-v2"
+        }
       },
       spec: {
+        // Let OpenShift assign random UID - don't fight the SCC
         containers: [
           {
             name: "postgres",
-            image: "postgres:13",  // Standard PostgreSQL image - works with anyuid SCC
+            image: "registry.redhat.io/rhel8/postgresql-13:latest",  // Official Red Hat PostgreSQL image
             env: [
-              { name: "POSTGRES_DATABASE", value: "students" },
-              { name: "POSTGRES_USER", value: "user" },
-              { name: "POSTGRES_PASSWORD", value: dbPassword },
-              { name: "POSTGRES_DB", value: "students" },  // Ensure database is created
-              { name: "PGDATA", value: "/var/lib/postgresql/data/pgdata" },
+              { name: "POSTGRESQL_DATABASE", value: "students" },
+              { name: "POSTGRESQL_USER", value: "user" },
+              { name: "POSTGRESQL_PASSWORD", value: dbPassword },
             ],
             ports: [{ containerPort: 5432 }],
             volumeMounts: [{
               name: "postgres-data",
-              mountPath: "/var/lib/postgresql/data"
+              mountPath: "/var/lib/pgsql/data"
             }],
             readinessProbe: {
               exec: {
-                command: ["pg_isready", "-U", "user", "-d", "students"]
+                command: ["sh", "-c", "pg_isready -h localhost -p 5432"]
               },
               initialDelaySeconds: 15,
               periodSeconds: 5
             },
             livenessProbe: {
               exec: {
-                command: ["pg_isready", "-U", "user", "-d", "students"]
+                command: ["sh", "-c", "pg_isready -h localhost -p 5432"]
               },
               initialDelaySeconds: 30,
               periodSeconds: 10
