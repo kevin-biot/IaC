@@ -131,9 +131,13 @@ const route = new k8s.apiextensions.CustomResource("web-route", {
   },
 }, { dependsOn: [appSvc] });
 
-// RBAC with proper dependencies
+// RBAC with explicit name and proper dependencies
+const roleName = "web-role";
 const role = new k8s.rbac.v1.Role("web-role", {
-  metadata: { namespace: namespace.metadata.name },
+  metadata: { 
+    name: roleName,
+    namespace: namespace.metadata.name 
+  },
   rules: [
     { apiGroups: [""], resources: ["configmaps"], verbs: ["get", "list"] },
     { apiGroups: [""], resources: ["pods"], verbs: ["get", "list"] },
@@ -141,19 +145,24 @@ const role = new k8s.rbac.v1.Role("web-role", {
   ],
 }, { dependsOn: [namespace] });
 
-new k8s.rbac.v1.RoleBinding("web-rolebinding", {
-  metadata: { namespace: namespace.metadata.name },
+const roleBinding = new k8s.rbac.v1.RoleBinding("web-rolebinding", {
+  metadata: { 
+    name: "web-rolebinding",
+    namespace: namespace.metadata.name 
+  },
   subjects: [
-    { kind: "ServiceAccount", name: "default", namespace: namespace.metadata.name },
+    { kind: "ServiceAccount", name: "default", namespace: nsName },
   ],
   roleRef: {
     kind: "Role",
-    name: role.metadata.name,
+    name: roleName,  // Use explicit string instead of resource reference
     apiGroup: "rbac.authorization.k8s.io",
   },
 }, { dependsOn: [role] });
 
 // Export the application URL - construct it properly for OpenShift routes
-export const appUrl = pulumi.interpolate`https://${route.metadata.name}-${namespace.metadata.name}.apps.cluster.local`;
+// Note: The actual domain will be determined by the OpenShift cluster configuration
+export const appUrl = pulumi.interpolate`https://web-route-${nsName}.apps.cluster.local`;
+export const routeName = route.metadata.name;
 export const buildStatus = buildRun.metadata.name;
 export const namespace_name = namespace.metadata.name;
