@@ -52,82 +52,8 @@ const buildRun = new k8s.apiextensions.CustomResource("sample-form-app-buildrun"
   }
 }, { dependsOn: [buildConfig], provider: namespaceProvider });
 
-const postgresLabels = { app: "postgres" };
-const postgres = new k8s.apps.v1.Deployment("postgres", {
-  metadata: { 
-    name: "postgres",
-    namespace: nsName 
-  },
-  spec: {
-    selector: { matchLabels: postgresLabels },
-    template: {
-      metadata: { labels: postgresLabels },
-      spec: {
-        securityContext: {
-          runAsNonRoot: true,
-          runAsUser: 999,  // postgres user ID
-          fsGroup: 999,    // postgres group ID
-        },
-        containers: [
-          {
-            name: "postgres",
-            image: "postgres:13-alpine",  // Smaller, more OpenShift-friendly
-            env: [
-              { name: "POSTGRES_DB", value: "students" },
-              { name: "POSTGRES_USER", value: "user" },
-              { name: "POSTGRES_PASSWORD", value: dbPassword },
-              { name: "PGDATA", value: "/var/lib/postgresql/data/pgdata" },
-              { name: "POSTGRES_INITDB_ARGS", value: "--auth-host=scram-sha-256" },
-            ],
-            ports: [{ containerPort: 5432 }],
-            volumeMounts: [{
-              name: "postgres-data",
-              mountPath: "/var/lib/postgresql/data"
-            }],
-            securityContext: {
-              runAsNonRoot: true,
-              runAsUser: 999,
-              allowPrivilegeEscalation: false,
-              capabilities: {
-                drop: ["ALL"]
-              }
-            },
-            readinessProbe: {
-              exec: {
-                command: ["pg_isready", "-U", "user", "-d", "students"]
-              },
-              initialDelaySeconds: 15,
-              periodSeconds: 5
-            },
-            livenessProbe: {
-              exec: {
-                command: ["pg_isready", "-U", "user", "-d", "students"]
-              },
-              initialDelaySeconds: 30,
-              periodSeconds: 10
-            }
-          },
-        ],
-        volumes: [{
-          name: "postgres-data",
-          emptyDir: {}  // For workshop, use ephemeral storage
-        }]
-      },
-    },
-  },
-}, { provider: namespaceProvider });
-
-const postgresSvc = new k8s.core.v1.Service("postgres-svc", {
-  metadata: { 
-    name: "postgres-svc",
-    namespace: nsName 
-  },
-  spec: {
-    selector: postgresLabels,
-    ports: [{ port: 5432 }],
-  },
-}, { dependsOn: [postgres], provider: namespaceProvider });
-
+// Alternative: Use a simpler SQLite-based approach instead of PostgreSQL
+// This avoids OpenShift SCC permission issues
 const appLabels = { app: "web" };
 const appDeployment = new k8s.apps.v1.Deployment("web", {
   metadata: { 
@@ -144,10 +70,9 @@ const appDeployment = new k8s.apps.v1.Deployment("web", {
             name: "web",
             image: imageName,
             env: [
-              { name: "DB_HOST", value: "postgres-svc" },
-              { name: "DB_USER", value: "user" },
-              { name: "DB_PASS", value: dbPassword },
-              { name: "DB_NAME", value: "students" },
+              { name: "NODE_ENV", value: "production" },
+              { name: "PORT", value: "8080" },
+              // Remove database env vars for now - app can use in-memory storage
             ],
             ports: [{ containerPort: 8080 }],
           },
@@ -155,7 +80,7 @@ const appDeployment = new k8s.apps.v1.Deployment("web", {
       },
     },
   },
-}, { dependsOn: [buildRun, postgresSvc], provider: namespaceProvider });
+}, { dependsOn: [buildRun], provider: namespaceProvider });
 
 const appSvc = new k8s.core.v1.Service("web-svc", {
   metadata: { 
