@@ -1,0 +1,22 @@
+apiVersion: shipwright.io/v1beta1
+kind: Build
+metadata:
+  name: nodejs-form-app-build
+  namespace: devops
+spec:
+  source:
+    type: Git
+    contextDir: app
+    git:
+      url: https://github.com/kevin-biot/IaC
+      revision: main
+  strategy:
+    name: buildah-shipwright-kevin
+    kind: ClusterBuildStrategy
+  output:
+    image: image-registry.openshift-image-registry.svc:5000/devops/nodejs-form-app:latest
+  paramValues:
+    - name: dockerfile
+      value: Dockerfile
+    - name: storage-driver
+      value: vfs
