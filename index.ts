@@ -50,7 +50,7 @@ const buildConfig = new k8s.apiextensions.CustomResource("sample-form-app-build"
   }
 }, { provider: namespaceProvider });
 
-// Trigger the build using v1beta1 API with required parameters
+// Trigger the build using v1beta1 API - let Shipwright inject parameters automatically
 const buildRun = new k8s.apiextensions.CustomResource("sample-form-app-buildrun", {
   apiVersion: "shipwright.io/v1beta1", 
   kind: "BuildRun",
@@ -61,17 +61,8 @@ const buildRun = new k8s.apiextensions.CustomResource("sample-form-app-buildrun"
   spec: {
     build: {
       name: "sample-form-app-build"
-    },
-    paramValues: [
-      {
-        name: "shp-source-root",
-        value: "app"
-      },
-      {
-        name: "shp-output-image", 
-        value: imageName
-      }
-    ]
+    }
+    // Remove paramValues - Shipwright auto-injects shp-source-root and shp-output-image
   }
 }, { dependsOn: [buildConfig], provider: namespaceProvider });
 
