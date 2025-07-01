@@ -9,13 +9,14 @@ const dbPassword = config.getSecret("dbPassword") || pulumi.secret("password");
 const imageName = `image-registry.openshift-image-registry.svc:5000/${nsName}/sample-form-app:latest`;
 
 // Use existing namespace instead of creating new one
+// This avoids conflicts when namespace already exists
 const namespaceProvider = new k8s.Provider("k8s-provider", {
   namespace: nsName,
 });
 
-// Tekton BuildConfig for application image using buildah (like java-webapp)
+// Tekton BuildConfig for application image
 const buildConfig = new k8s.apiextensions.CustomResource("sample-form-app-build", {
-  apiVersion: "shipwright.io/v1beta1",
+  apiVersion: "shipwright.io/v1alpha1",
   kind: "Build",
   metadata: { 
     name: "sample-form-app-build",
@@ -23,49 +24,35 @@ const buildConfig = new k8s.apiextensions.CustomResource("sample-form-app-build"
   },
   spec: {
     source: {
-      type: "Git",
-      contextDir: "app",
-      git: {
-        url: "https://github.com/kevin-biot/IaC",
-        revision: "main"
-      }
+      url: "https://github.com/kevin-biot/IaC",
+      contextDir: "app"
     },
     strategy: {
-      name: "buildah",  // Use buildah like the working java-webapp
-      kind: "ClusterBuildStrategy"
+      name: "buildpacks-v3",
+      kind: "BuildStrategy"
     },
     output: {
       image: imageName
-    },
-    paramValues: [
-      {
-        name: "dockerfile",
-        value: "Dockerfile"
-      },
-      {
-        name: "storage-driver",
-        value: "vfs"
-      }
-    ]
+    }
   }
 }, { provider: namespaceProvider });
 
-// Trigger the build using v1beta1 API like java-webapp
+// Trigger the build
 const buildRun = new k8s.apiextensions.CustomResource("sample-form-app-buildrun", {
-  apiVersion: "shipwright.io/v1beta1", 
+  apiVersion: "shipwright.io/v1alpha1", 
   kind: "BuildRun",
   metadata: {
     name: "sample-form-app-buildrun",
     namespace: nsName
   },
   spec: {
-    build: {
+    buildRef: {
       name: "sample-form-app-build"
     }
   }
 }, { dependsOn: [buildConfig], provider: namespaceProvider });
 
-// Use Bitnami PostgreSQL (this is working)
+// Use publicly available PostgreSQL image that works with anyuid SCC
 const postgresLabels = { app: "postgres" };
 const postgres = new k8s.apps.v1.Deployment("postgres", {
   metadata: { 
@@ -82,12 +69,12 @@ const postgres = new k8s.apps.v1.Deployment("postgres", {
         containers: [
           {
             name: "postgres",
-            image: "docker.io/bitnami/postgresql:13",
+            image: "docker.io/bitnami/postgresql:13",  // Bitnami - OpenShift compatible
             env: [
               { name: "POSTGRESQL_DATABASE", value: "students" },
               { name: "POSTGRESQL_USERNAME", value: "user" },
               { name: "POSTGRESQL_PASSWORD", value: dbPassword },
-              { name: "POSTGRES_PASSWORD", value: dbPassword },
+              { name: "POSTGRES_PASSWORD", value: dbPassword },  // Bitnami also checks this
             ],
             ports: [{ containerPort: 5432 }],
             volumeMounts: [{
@@ -112,7 +99,7 @@ const postgres = new k8s.apps.v1.Deployment("postgres", {
         ],
         volumes: [{
           name: "postgres-data",
-          emptyDir: {}
+          emptyDir: {}  // For workshop, use ephemeral storage
         }]
       },
     },
@@ -130,7 +117,6 @@ const postgresSvc = new k8s.core.v1.Service("postgres-svc", {
   },
 }, { dependsOn: [postgres], provider: namespaceProvider });
 
-// Deploy web app using existing java-webapp image (temporary)
 const appLabels = { app: "web" };
 const appDeployment = new k8s.apps.v1.Deployment("web", {
   metadata: { 
@@ -145,7 +131,7 @@ const appDeployment = new k8s.apps.v1.Deployment("web", {
         containers: [
           {
             name: "web",
-            image: imageName,  // Using our built Node.js image
+            image: imageName,
             env: [
               { name: "DB_HOST", value: "postgres-svc" },
               { name: "DB_USER", value: "user" },
@@ -185,8 +171,8 @@ const route = new k8s.apiextensions.CustomResource("web-route", {
   },
 }, { dependsOn: [appSvc], provider: namespaceProvider });
 
-// Export the application URL
+// Export the application URL - construct it properly for OpenShift routes
 export const appUrl = pulumi.interpolate`https://web-route-${nsName}.apps.cluster.local`;
 export const routeName = "web-route";
-export const buildStatus = "using-existing-java-webapp-image";
+export const buildStatus = "sample-form-app-buildrun";
 export const namespace_name = nsName;
