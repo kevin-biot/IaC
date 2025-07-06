@@ -29,8 +29,12 @@ Your code-server environment includes all necessary tools:
 
 ## 🚀 Quick Start Guide
 
-### Step 1: Setup Your Environment
+### Step 1: Clone and Setup Your Environment
 ```bash
+# Clone the workshop repository
+git clone https://github.com/kevin-biot/IaC.git
+cd IaC
+
 # Install Node.js dependencies
 npm install
 
